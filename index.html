@@ -72,8 +72,10 @@ button:hover{filter:brightness(1.15)}button:disabled{opacity:.45;cursor:not-allo
      <div><div class="small muted">MỰC NƯỚC</div><div class="percent"><span id="levelValue">--</span>%</div><div id="phase" class="small muted">Đang chờ dữ liệu</div></div>
     </div>
     <div class="metrics">
-     <div class="metric"><span>Chế độ</span><b id="mode">--</b></div><div class="metric"><span>Máy bơm</span><b id="pump">--</b></div>
-     <div class="metric"><span>Van</span><b id="valve">--</b></div><div class="metric"><span>Lỗi</span><b id="fault">--</b></div>
+     <div class="metric"><span>ESP32</span><b id="deviceStatus">CHỜ</b></div><div class="metric"><span>Chế độ</span><b id="mode">--</b></div>
+     <div class="metric"><span>Máy bơm</span><b id="pump">--</b></div><div class="metric"><span>Van</span><b id="valve">--</b></div>
+     <div class="metric"><span>Nước vào</span><b id="flow">--</b></div><div class="metric"><span>Phao cao</span><b id="float">--</b></div>
+     <div class="metric span2"><span>Tình trạng / lỗi</span><b id="fault">Đang chờ dữ liệu</b></div>
     </div>
    </section>
    <section class="panel"><h2>Phản hồi MQTT</h2><div id="log" class="log">Kết nối MQTT để nhận trạng thái...</div></section>
@@ -117,6 +119,7 @@ button:hover{filter:brightness(1.15)}button:disabled{opacity:.45;cursor:not-allo
  function updateState(raw){
   let state;
   try{state=JSON.parse(raw)}catch{log('State không phải JSON: '+raw);return}
+  $('deviceStatus').textContent=state.online===false?'OFFLINE':'ONLINE';
   if(Number.isFinite(Number(state.level))){
    const value=Math.max(0,Math.min(100,Number(state.level)));
    $('levelValue').textContent=value;
@@ -127,7 +130,9 @@ button:hover{filter:brightness(1.15)}button:disabled{opacity:.45;cursor:not-allo
   $('pump').textContent=state.pump===true?'CHẠY':state.pump===false?'TẮT':'--';
   $('valve').textContent=state.valve===true?'MỞ':state.valve===false?'ĐÓNG':'--';
   $('phase').textContent=state.phase||'--';
-  $('fault').textContent=Number(state.fault)>0?('E'+state.fault):'Không';
+  $('flow').textContent=state.flow===true?'CÓ':'KHÔNG';
+  $('float').textContent=state.full===true?'TÁC ĐỘNG':'TẮT';
+  $('fault').textContent=Number(state.fault)>0?('E'+state.fault+' · '+(state.faultText||state.message||'Có lỗi')):(state.message||'Không có lỗi');
   lastStateAt=Date.now();
   $('telemetry').textContent='Đang nhận trạng thái · '+stateTopic+' · cập nhật '+new Date(lastStateAt).toLocaleTimeString();
   log('Trạng thái: '+raw);
@@ -161,7 +166,12 @@ button:hover{filter:brightness(1.15)}button:disabled{opacity:.45;cursor:not-allo
   client.on('error',error=>{setConnected(false);log('Lỗi MQTT: '+error.message)});
   client.on('message',(topic,payload)=>{
    const text=payload.toString();
-   if(topic===stateTopic)updateState(text);else log('ESP32: '+text);
+   if(topic===stateTopic)updateState(text);
+   else if(topic===eventTopic){
+    if(text==='online'){$('deviceStatus').textContent='ONLINE';$('telemetry').textContent='ESP32 vừa báo ONLINE · đang chờ trạng thái bồn.'}
+    else if(text==='offline'){$('deviceStatus').textContent='OFFLINE';$('telemetry').textContent='ESP32 báo OFFLINE; kiểm tra Wi-Fi hoặc kết nối EMQX.'}
+    else log('ESP32: '+text);
+   }
   });
  });
  $('disconnect').addEventListener('click',()=>{if(client){client.end(true);client=null}setConnected(false);log('Đã ngắt kết nối.')});
