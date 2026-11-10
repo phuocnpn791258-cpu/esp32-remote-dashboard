@@ -29,6 +29,7 @@ button:hover{filter:brightness(1.15)}button:disabled{opacity:.45;cursor:not-allo
 .metric{border:1px solid #293b53;border-radius:12px;padding:11px;background:#101a29}.metric span{display:block;color:var(--muted);font-size:11px}.metric b{display:block;font-size:16px;margin-top:2px;word-break:break-word}
 .online{color:#86efac}.offline{color:#fda4af}.log{height:130px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:#09111d;border:1px solid #26364d;border-radius:11px;padding:11px;color:#a7f3d0;font:12px/1.55 ui-monospace,Consolas,monospace}
 .small{font-size:12px}.security{border:1px solid #614d25;background:#2c2413;color:#f6d990;border-radius:12px;padding:12px;font-size:12px;margin-top:14px}
+.telemetry{margin-top:12px;padding:10px 12px;border:1px solid #304057;border-radius:10px;background:#101a29;color:#cbd5e1;font-size:12px;overflow-wrap:anywhere}
 .hidden{display:none}
 @media(max-width:740px){.layout{grid-template-columns:1fr}.wrap{width:calc(100% - 20px);padding-top:16px}}
 @media(max-width:420px){.fields{grid-template-columns:1fr}.span2{grid-column:auto}.panel{padding:14px}.tank{grid-template-columns:92px 1fr}.vessel{height:180px}}
@@ -45,11 +46,13 @@ button:hover{filter:brightness(1.15)}button:disabled{opacity:.45;cursor:not-allo
     <h2>Kết nối EMQX</h2>
     <div class="fields">
      <div class="span2"><label for="url">Secure WebSocket URL</label><input id="url" value="wss://q8d13186.ala.asia-southeast1.emqxsl.com:8084/mqtt" autocomplete="url"></div>
+     <div class="span2"><label for="deviceId">ID thiết bị ESP32 (phần sau esp32/b02/)</label><input id="deviceId" value="ESP32-B02-2CBCBB0DC338" autocomplete="off"></div>
      <div><label for="username">Username</label><input id="username" autocomplete="username"></div>
      <div><label for="password">Password</label><input id="password" type="password" autocomplete="current-password"></div>
     </div>
     <div class="actions"><button id="connect" class="primary">Kết nối</button><button id="disconnect">Ngắt kết nối</button></div>
     <div class="small muted" style="margin-top:9px">Client ID trên web được tạo riêng, không trùng Client ID ESP32.</div>
+    <div id="telemetry" class="telemetry">Chưa kết nối — đang chờ trạng thái thiết bị.</div>
     <div class="security">Mật khẩu chỉ giữ trong trang đang mở, không lưu vào bộ nhớ trình duyệt. Nếu EMQX của bạn hiển thị WebSocket URL/port khác, thay URL ở ô trên bằng thông tin trong EMQX.</div>
    </section>
    <section class="panel">
@@ -81,11 +84,9 @@ button:hover{filter:brightness(1.15)}button:disabled{opacity:.45;cursor:not-allo
 <script>
 (() => {
  'use strict';
- const device='ESP32-B02-2CBCBB0DC338';
- const root='esp32/b02/'+device;
- const commandTopic=root+'/cmd', stateTopic=root+'/state', eventTopic=root+'/event';
  const $=id=>document.getElementById(id);
  let client=null;
+ let commandTopic='',stateTopic='',eventTopic='',subscribed=false,lastStateAt=0;
  function log(message){
   const box=$('log'), line=new Date().toLocaleTimeString()+' | '+message;
   box.textContent=(box.textContent==='Kết nối MQTT để nhận trạng thái...'?'':box.textContent+'\n')+line;
@@ -98,6 +99,14 @@ button:hover{filter:brightness(1.15)}button:disabled{opacity:.45;cursor:not-allo
   $('connect').disabled=connected;
   $('disconnect').disabled=!connected;
   document.querySelectorAll('[data-command],#sendLevel').forEach(button=>button.disabled=!connected);
+  if(!connected){subscribed=false;$('telemetry').textContent='Chưa kết nối — trạng thái bồn chưa nhận được.'}
+ }
+ function configureTopics(){
+  const device=$('deviceId').value.trim();
+  if(!/^[A-Za-z0-9_-]+$/.test(device)){log('ID thiết bị chỉ được gồm chữ, số, gạch ngang hoặc gạch dưới.');return false}
+  const root='esp32/b02/'+device;
+  commandTopic=root+'/cmd';stateTopic=root+'/state';eventTopic=root+'/event';
+  return true;
  }
  function send(command){
   if(!client||!client.connected){log('Chưa kết nối MQTT.');return}
@@ -118,7 +127,9 @@ button:hover{filter:brightness(1.15)}button:disabled{opacity:.45;cursor:not-allo
   $('pump').textContent=state.pump===true?'CHẠY':state.pump===false?'TẮT':'--';
   $('valve').textContent=state.valve===true?'MỞ':state.valve===false?'ĐÓNG':'--';
   $('phase').textContent=state.phase||'--';
-  $('fault').textContent=state.fault?('E'+state.fault):'Không';
+  $('fault').textContent=Number(state.fault)>0?('E'+state.fault):'Không';
+  lastStateAt=Date.now();
+  $('telemetry').textContent='Đang nhận trạng thái · '+stateTopic+' · cập nhật '+new Date(lastStateAt).toLocaleTimeString();
   log('Trạng thái: '+raw);
  }
  $('level').addEventListener('input',()=> $('levelLabel').textContent=$('level').value);
@@ -126,14 +137,23 @@ button:hover{filter:brightness(1.15)}button:disabled{opacity:.45;cursor:not-allo
   if(typeof mqtt==='undefined'){log('Không tải được MQTT.js. Kiểm tra Internet rồi tải lại trang.');return}
   const url=$('url').value.trim(),username=$('username').value.trim(),password=$('password').value;
   if(!url||!username||!password){log('Nhập WebSocket URL, username và password.');return}
+  if(!configureTopics())return;
   if(client){client.end(true)}
   const clientId='MQTTX-remote-'+Math.random().toString(16).slice(2,12);
   client=mqtt.connect(url,{clientId,username,password,clean:true,connectTimeout:10000,reconnectPeriod:3000,keepalive:30});
   client.on('connect',()=>{
    setConnected(true);log('Đã kết nối broker bằng '+clientId);
-   client.subscribe([stateTopic,eventTopic],{qos:0},error=>{
-    if(error)log('Đăng ký topic lỗi: '+error.message);
-    else log('Đang nhận '+stateTopic+' và '+eventTopic);
+   client.subscribe([stateTopic,eventTopic],{qos:0},(error,granted)=>{
+    if(error){$('telemetry').textContent='Không đăng ký được topic trạng thái. Kiểm tra ACL của tài khoản EMQX.';log('Đăng ký topic lỗi: '+error.message)}
+    else if(granted&&granted.some(item=>item.qos===128)){
+     $('telemetry').textContent='Broker từ chối quyền đọc topic trạng thái. Kiểm tra ACL trong EMQX.';
+     log('Broker từ chối subscription; kiểm tra quyền Subscribe.');
+    }else{
+     subscribed=true;lastStateAt=0;
+     $('telemetry').textContent='Đã đăng ký topic; đang chờ ESP32 gửi dữ liệu: '+stateTopic;
+     log('Đang nhận '+stateTopic+' và '+eventTopic);
+     send('STATUS');
+    }
    });
   });
   client.on('reconnect',()=>{setConnected(false);log('Đang kết nối lại...')});
@@ -147,6 +167,10 @@ button:hover{filter:brightness(1.15)}button:disabled{opacity:.45;cursor:not-allo
  $('disconnect').addEventListener('click',()=>{if(client){client.end(true);client=null}setConnected(false);log('Đã ngắt kết nối.')});
  document.querySelectorAll('[data-command]').forEach(button=>button.addEventListener('click',()=>send(button.dataset.command)));
  $('sendLevel').addEventListener('click',()=>send('LEVEL '+$('level').value));
+ setInterval(()=>{
+  if(subscribed&&!lastStateAt){$('telemetry').textContent='Đã đăng ký topic nhưng chưa nhận trạng thái. Kiểm tra ID thiết bị, quyền Subscribe và ESP32 có đang kết nối MQTT không: '+stateTopic}
+  else if(subscribed&&Date.now()-lastStateAt>5000){$('telemetry').textContent='Mất cập nhật trạng thái hơn 5 giây. Kiểm tra kết nối MQTT của ESP32.'}
+ },2000);
  setConnected(false);
 })();
 </script>
